@@ -1,4 +1,4 @@
-from albumentations.augmentations.functional import scale
+# from albumentations.augmentations.functional import scale
 import torch
 import torch.nn as nn
 from tqdm import tqdm
@@ -14,15 +14,16 @@ def centercrop(x: torch.tensor, s: torch.Size) -> torch.tensor:
     # than the tensor, do nothing.
     hc = x.shape[-2] - s[-2]
     wc = x.shape[-1] - s[-1]
-    
+
     if (wc < 0) or (hc < 0):
         return x
 
     hc = hc // 2
     wc = wc // 2
-    xcropped = x[:, :, hc:hc+s[-2], wc:wc+s[-1]]
+    xcropped = x[:, :, hc : hc + s[-2], wc : wc + s[-1]]
 
     return xcropped
+
 
 class DoubleConv(nn.Module):
     def __init__(self, inputChannels, outputChannels):
@@ -38,11 +39,12 @@ class DoubleConv(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv2d(outputChannels, outputChannels, kernel_size, bias=False),
             nn.BatchNorm2d(outputChannels),
-            nn.ReLU(inplace=True)
+            nn.ReLU(inplace=True),
         )
-    
+
     def forward(self, x):
         return self.dconv(x)
+
 
 class Upstep(nn.Module):
     def __init__(self, inputChannels, outputChannels):
@@ -64,6 +66,7 @@ class Upstep(nn.Module):
         x = self.conv(x)
         return x
 
+
 class UNET(nn.Module):
     def __init__(self):
         super().__init__()
@@ -81,9 +84,9 @@ class UNET(nn.Module):
             self.encoder.append(DoubleConv(in_channels, channels))
             in_channels = channels
 
-        self.bottleneck = DoubleConv(in_channels, in_channels*2) 
-    
-        in_channels = in_channels*2
+        self.bottleneck = DoubleConv(in_channels, in_channels * 2)
+
+        in_channels = in_channels * 2
         for channels in reversed(convolution_channels):
             self.decoder.append(Upstep(in_channels, channels))
             in_channels = channels
@@ -91,7 +94,7 @@ class UNET(nn.Module):
         # Each segmentation label has its own output channel!
         self.output = nn.Conv2d(in_channels, output_channels, kernel_size=1)
 
-        """       
+        """
         self.output = nn.Sequential(
             nn.Conv2d(in_channels, output_channels, kernel_size=3, bias=False),
             nn.BatchNorm2d(output_channels))
@@ -107,7 +110,7 @@ class UNET(nn.Module):
             skip_tensors.append(x)
             x = self.pool(x)
             print(f"Encoder Step [{i}]: output tensor shape {x.shape}")
-        
+
         # Bottleneck
         print(f"Bottleneck: input tensor shape {x.shape}")
         x = self.bottleneck(x)
@@ -116,24 +119,24 @@ class UNET(nn.Module):
         # Upwards path
         for i, (step, skip_tensor) in enumerate(zip(self.decoder, reversed(skip_tensors))):
             print(f"Decoder Step [{i}]: input tensor shape {x.shape}, skip tensor shape {skip_tensor.shape}")
-            from pudb import set_trace as st; st()
+            # from pudb import set_trace as st; st()
             x = step(x, skip_tensor)
             print(f"Decoder Step [{i}]: output tensor shape {x.shape}")
-        
+
         x = self.output(x)
         print(f"Final tensor: {x.shape}")
         return x
 
 
-class ModelManager():
-    def __init__(self, model, data, loss_fn, optimizer, working_dir):
+class ModelManager:
+    def __init__(self, model, data, loss_fn, optimizer, working_dir, dev):
         self._model = model
         self._training_data = data.training_loader
         self._validation_data = data.validation_loader
         self._loss_fn = loss_fn
         self._optimizer = optimizer
         self._working_dir = working_dir
-        self._dev = "cuda" if torch.cuda.is_available() else "cpu"
+        self._dev = dev
 
         self._scaler = torch.cuda.amp.GradScaler()
 
