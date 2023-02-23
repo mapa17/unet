@@ -9,6 +9,3 @@ def test_CaravanImageDataset():
     ds = CaravanImageDataset(Path("data/train"), Path("data/train_masks"), trn_tf)
     image, mask = ds[0]
     assert image is not None and mask is not None, "Could not load images ..."
-
-
-test_CaravanImageDataset()
