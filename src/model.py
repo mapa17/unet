@@ -1,22 +1,14 @@
 # from albumentations.augmentations.functional import scale
 import logging
 
-from dataset import CaravanImageDataLoader
+import torch
+import torch.nn as nn
 
 log = logging.getLogger(__name__)
 log.setLevel(logging.INFO)
 
-import torch
-import torch.nn as nn
-from torch.nn.modules.loss import _Loss
-from torch.optim import Optimizer
-import torch.profiler
-from torch.profiler import tensorboard_trace_handler
 
-from tqdm import tqdm
-
-
-def centercrop(x: torch.tensor, s: torch.Size) -> torch.tensor:
+def centercrop(x: torch.Tensor, s: torch.Size) -> torch.Tensor:
     """
     Apply center cropping on given tensor `x`, so that the cropped
     tensor has the size defined by `s`.
@@ -73,7 +65,7 @@ class DoubleConv(nn.Module):
             nn.ReLU(inplace=True),
         )
 
-    def forward(self, x):
+    def forward(self, x : torch.Tensor) -> torch.Tensor:
         return self.dconv(x)
 
 
@@ -85,7 +77,7 @@ class Upstep(nn.Module):
         )
         self.conv = DoubleConv(inputChannels, outputChannels)
 
-    def forward(self, x, skip_tensor):
+    def forward(self, x : torch.Tensor, skip_tensor : torch.Tensor) -> torch.Tensor:
         """
         Do:
         * Unconv to x
@@ -127,14 +119,9 @@ class UNET(nn.Module):
         # Each segmentation label has its own output channel!
         self.output = nn.Conv2d(in_channels, output_channels, kernel_size=1)
 
-        log.info(f"Created model with parameters {self.parameters()}")
-        """
-        self.output = nn.Sequential(
-            nn.Conv2d(in_channels, output_channels, kernel_size=3, bias=False),
-            nn.BatchNorm2d(output_channels))
-        """
+        log.info(f"UNET model {self} ...")
 
-    def forward(self, x):
+    def forward(self, x : torch.Tensor) -> torch.Tensor:
         skip_tensors = []
 
         # Downwards path
@@ -157,7 +144,6 @@ class UNET(nn.Module):
             log.debug(
                 f"Decoder Step [{i}]: input tensor shape {x.shape}, skip tensor shape {skip_tensor.shape}"
             )
-            # from pudb import set_trace as st; st()
             x = step(x, skip_tensor)
             log.debug(f"Decoder Step [{i}]: output tensor shape {x.shape}")
 
@@ -166,96 +152,3 @@ class UNET(nn.Module):
         return x
 
 
-class ModelManager:
-    def __init__(
-        self,
-        model: nn.Module,
-        data: CaravanImageDataLoader,
-        loss_fn: _Loss,
-        optimizer: Optimizer,
-        working_dir: str,
-        dev: str,
-        amp: bool,
-    ):
-        self._model = model
-        self._training_data = data.training_loader
-        self._validation_data = data.validation_loader
-        self._loss_fn = loss_fn
-        self._optimizer = optimizer
-        self._working_dir = working_dir
-        self._dev = dev
-        self.amp = amp
-
-        if self.amp:
-            self._scaler = torch.cuda.amp.GradScaler()
-        else:
-            self._scaler = None
-
-    def train_epoch(self):
-        loss = 0
-
-        #with torch.profiler.profile(
-        #    schedule=torch.profiler.schedule(
-        #        wait=1,
-        #        warmup=1,
-        #        active=6,
-        #        repeat=1),
-        #    on_trace_ready=torch.profiler.tensorboard_trace_handler('./tensorboard'),
-        #    with_stack=True
-        #) as profiler:
-        self._model.train()
-        with tqdm(self._training_data, desc="TRN") as loop:
-            for batch_idx, (data, targets) in enumerate(loop):
-                log.debug(f"Training batch {batch_idx}/{len(self._training_data)} ...")
-                data = data.to(device=self._dev)
-                targets = targets.float().unsqueeze(1).to(device=self._dev)
-
-                # If automatic mixed precision is available, use it with the GradScaler to increase performance
-                if self.amp:
-                    # Forward
-                    with torch.amp.autocast(
-                        device_type=self._dev, dtype=torch.bfloat16
-                    ):
-                        predictions = self._model(data)
-                        loss = self._loss_fn(predictions, targets)
-
-                    # backward
-                    self._optimizer.zero_grad(set_to_none=True)
-                    self._scaler.scale(loss).backward()
-                    self._scaler.step(self._optimizer)
-                    self._scaler.update()
-                else:
-                    # Forward
-                    predictions = self._model(data)
-                    loss = self._loss_fn(predictions, targets)
-
-                    # backward
-                    self._optimizer.zero_grad(set_to_none=True)
-                    loss.backward()
-                    self._optimizer.step()
-
-                # update tqdm loop
-                loop.set_postfix(loss=loss.item())
-                #profiler.step()
-
-        logging.debug("Running validation ...")
-        val_loss = 0
-        self._model.eval()
-        with torch.no_grad():
-            with tqdm(self._validation_data, desc="VAL") as loop:
-                for batch_idx, (data, targets) in enumerate(loop):
-                    self._optimizer.zero_grad()
-                    data = data.to(device=self._dev)
-                    targets = targets.float().unsqueeze(1).to(device=self._dev)
-
-                    # forward
-                    predictions = self._model(data)
-                    val_loss += self._loss_fn(predictions, targets)
-
-                    loop.set_postfix(loss=val_loss.item()/(batch_idx+1))
-
-        val_loss = val_loss / len(self._validation_data)
-        return loss, val_loss
-
-    def train(self):
-        pass
