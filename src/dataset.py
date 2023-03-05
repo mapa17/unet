@@ -16,6 +16,33 @@ from torch.utils.data import Dataset
 
 # from numpy.lib.histograms import _histogram_bin_edges_dispatcher
 
+class CaravanImage(Dataset):
+    """Helper class to load image data for inference
+    """
+    # Optimized for the kaggle dataset: https://www.kaggle.com/competitions/carvana-image-masking-challenge/data
+    def __init__(self, image_path: Path, batch_size: int = 32):
+        self._image_path = image_path.absolute()
+
+        self.images = sorted(glob(str(self._image_path.joinpath("*.jpg"))))
+        self.nImages = len(self.images)
+
+        assert self.nImages > 0, "Could not find images!"
+
+        self.data_loader = DataLoader(
+            self, batch_size=batch_size, num_workers=4, pin_memory=True, shuffle=False
+        )
+
+    def __len__(self):
+        return self.nImages
+
+    def __getitem__(self, index: int) -> Tuple[List, List]:
+        imgpath = self.images[index % self.nImages]
+
+        image = cv2.imread(imgpath)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+        return image
+
 
 class CaravanImageDataset(Dataset):
     # Optimized for the kaggle dataset: https://www.kaggle.com/competitions/carvana-image-masking-challenge/data

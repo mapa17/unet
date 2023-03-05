@@ -1,6 +1,8 @@
 import logging
 import os
 from typing import Tuple, Optional
+import shutil
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -17,7 +19,7 @@ import numpy as np
 log = logging.getLogger(__name__)
 log.setLevel(logging.INFO)
 
-class ModelManager:
+class TrainingManager:
     def __init__(
         self,
         model: nn.Module,
@@ -79,7 +81,7 @@ class ModelManager:
         max_epoch = 1000 if max_epoch == 0 else max_epoch
 
         best_validation_loss = np.inf
-        best_epoch = None
+        best_epoch_path = None
         patience = 5
         for epoch in range(max_epoch):
             log.info(f"Starting training epoch {epoch} ...")
@@ -91,7 +93,7 @@ class ModelManager:
                 log.info(f"Storing model checkpoint in {opath} ...")
             
                 if val_loss < best_validation_loss:
-                    best_epoch = opath
+                    best_epoch_path = opath
                     best_validation_loss = val_loss
                     patience = 5
 
@@ -100,12 +102,16 @@ class ModelManager:
                 log.info("No training improvement! Will stop training ...")
                 break
         
-        if best_epoch:
-            best_epoch_cnt, best_val_loss = self.load_model(best_epoch)
+        if best_epoch_path:
+            best_epoch_cnt, best_val_loss = self.load_model(best_epoch_path)
             log.info(f"Finished Training with best epoch = {best_epoch_cnt}, val_loss = {best_val_loss}")
-            log.info(f"Best model is stored in checkoint {best_epoch} ...")
+            output_model_path = Path(best_epoch_path) / "model_best.pt"
+            log.info(f"Storing best model in {output_model_path} ...")
+            shutil.copy(best_epoch_path, output_model_path)
         else:
             log.warning("No model finished training!")
+        
+        log.info("Finished training ...")
 
 
 
