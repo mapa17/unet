@@ -7,41 +7,25 @@ from typing import Tuple
 import albumentations as A
 import cv2
 import numpy as np
+import numpy
 from albumentations import Compose
 from albumentations.pytorch import ToTensorV2
 from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
+import torch
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 
 # from numpy.lib.histograms import _histogram_bin_edges_dispatcher
 
-class CaravanImage(Dataset):
-    """Helper class to load image data for inference
-    """
-    # Optimized for the kaggle dataset: https://www.kaggle.com/competitions/carvana-image-masking-challenge/data
-    def __init__(self, image_path: Path, batch_size: int = 32):
-        self._image_path = image_path.absolute()
-
-        self.images = sorted(glob(str(self._image_path.joinpath("*.jpg"))))
-        self.nImages = len(self.images)
-
-        assert self.nImages > 0, "Could not find images!"
-
-        self.data_loader = DataLoader(
-            self, batch_size=batch_size, num_workers=4, pin_memory=True, shuffle=False
-        )
-
-    def __len__(self):
-        return self.nImages
-
-    def __getitem__(self, index: int) -> Tuple[List, List]:
-        imgpath = self.images[index % self.nImages]
-
-        image = cv2.imread(imgpath)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-        return image
+def create_figure_of_image_mask_pairs(pairs: List[Tuple[numpy.ndarray, numpy.ndarray]]) -> Figure:
+    fig, axs = plt.subplots(len(pairs), 2, figsize=(10, 10))
+    for (image, mask), (ax1, ax2) in zip(pairs, axs):
+        ax1.set_axis_off()
+        ax2.set_axis_off()
+        ax1.imshow(image)
+        ax2.imshow(mask, cmap='gray', vmin=0, vmax=255)
+    return fig
 
 
 class CaravanImageDataset(Dataset):
@@ -61,7 +45,7 @@ class CaravanImageDataset(Dataset):
     def __len__(self):
         return self.nImages
 
-    def __getitem__(self, index: int) -> Tuple[List, List]:
+    def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
         imgpath = self.images[index % self.nImages]
         maskpath = self.masks[index % self.nImages]
 
@@ -77,6 +61,7 @@ class CaravanImageDataset(Dataset):
         # transformation and the normalization transformation only has **image**
         # as a target, not **mask**
         mask = mask / 255.0
+        print(f"Mask min-max {mask.min()}-{mask.max()}")
 
         if self._transform:
             augmented = self._transform(image=image, mask=mask)
@@ -160,3 +145,37 @@ class CaravanImageDataLoader:
         )
 
         return train_transform, val_transforms
+
+class CaravanImage(Dataset):
+    """Helper class to load image data for inference
+    """
+    # Optimized for the kaggle dataset: https://www.kaggle.com/competitions/carvana-image-masking-challenge/data
+    def __init__(self, image_path: Path, transformation: Compose = None, batch_size: int = 32):
+        self._image_path = image_path.absolute()
+
+        if transformation is None:
+            # Get the validation transformation
+            _, transformation = CaravanImageDataLoader.get_default_transforms()
+        self.transformation = transformation
+
+        self.images = sorted(glob(str(self._image_path.joinpath("*.jpg"))))
+        self.nImages = len(self.images)
+
+        assert self.nImages > 0, "Could not find images!"
+
+        self.data_loader = DataLoader(
+            self, batch_size=batch_size, num_workers=4, pin_memory=True, shuffle=False
+        )
+
+    def __len__(self):
+        return self.nImages
+
+    def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        imgpath = self.images[index % self.nImages]
+
+        image = cv2.imread(imgpath)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        tensor = self.transformation(image=image)["image"]
+
+        return tensor 
+

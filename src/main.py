@@ -7,8 +7,10 @@ import torch
 import torch.nn as nn
 import click
 from tqdm import tqdm
+import numpy as np
+from matplotlib import pyplot as plt
 
-from dataset import CaravanImageDataLoader, CaravanImage
+from dataset import CaravanImageDataLoader, CaravanImage, create_figure_of_image_mask_pairs
 from model import UNET
 from trainingmanager import TrainingManager
 
@@ -67,17 +69,36 @@ def _train(data_folder: str, workdir: str, dev: torch.device, amp: bool):
 
 
 def _run(model_path: str, data_folder: str, dev: torch.device) -> None:
-    from pudb import set_trace as st; st()
     model = load_model(model_path, UNET, dev)
     model.eval()
     data = CaravanImage(Path(data_folder)).data_loader
-    log.info("Found {len(data)} images!")
+    log.info(f"Found {len(data)} images!")
+    masks = []
     with torch.no_grad():
         with tqdm(data, desc="Inference") as images:
             for i, image in enumerate(images):
                 _image = image.to(device=dev)
+
                 pred_mask = model(_image)
-                #pred_mask = _pred_mask.float().unsqueeze(1).to(device)
+
+                #minibatch_masks = pred_mask.float().unsqueeze(1).to("cpu").numpy()
+                # squeeze(1) ... get rid of the channel dimension, always 1
+                minibatch_masks = list(pred_mask.squeeze(1).to("cpu").numpy())
+
+                # Convert from [-X, +X] -> [0, 255]
+                norm_masks = [(((m - m.min())/(m.max()-m.min()))*255).astype(int) for m in minibatch_masks]
+                masks.extend(norm_masks)
+
+    original_images = []
+    image_masks = []
+    for i in range(3):
+        # Convert from tensor to numpy [C, X, Y] -> [X, Y, C]
+        original_images.append(np.moveaxis(data.dataset[i].numpy(), 0, -1))
+        image_masks.append(masks[i])
+
+    fig = create_figure_of_image_mask_pairs(list(zip(original_images, image_masks))) 
+    fig.show()
+    plt.show()
 
 
 
