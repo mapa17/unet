@@ -61,7 +61,7 @@ class CaravanImageDataset(Dataset):
         # transformation and the normalization transformation only has **image**
         # as a target, not **mask**
         mask = mask / 255.0
-        print(f"Mask min-max {mask.min()}-{mask.max()}")
+        #print(f"Mask min-max {mask.min()}-{mask.max()}")
 
         if self._transform:
             augmented = self._transform(image=image, mask=mask)
@@ -150,8 +150,17 @@ class CaravanImage(Dataset):
     """Helper class to load image data for inference
     """
     # Optimized for the kaggle dataset: https://www.kaggle.com/competitions/carvana-image-masking-challenge/data
-    def __init__(self, image_path: Path, transformation: Compose = None, batch_size: int = 32):
-        self._image_path = image_path.absolute()
+    def __init__(self, dataset_path: Path, transformation: Compose = None, batch_size: int = 32):
+        """Create a pytorch dataset from the given path containing (training, training_masks, validation, validation_masks)
+        Apply given transformations when loading the images during training.
+        For image augmentation, see [here](https://albumentations.ai/docs/examples/example/#Define-an-augmentation-pipeline-using-Compose,-pass-the-image-to-it-and-receive-the-augmented-image)
+
+        Args:
+            dataset_path (Path): file path to training data folder (containing separate subfolders)
+            transformation (Compose, optional): albumentations image augmentations. Defaults to None.
+            batch_size (int, optional): batch size. Defaults to 32.
+        """
+        self._image_path = dataset_path.absolute()
 
         if transformation is None:
             # Get the validation transformation

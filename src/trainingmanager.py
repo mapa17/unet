@@ -105,8 +105,9 @@ class TrainingManager:
         if best_epoch_path:
             best_epoch_cnt, best_val_loss = self.load_model(best_epoch_path)
             log.info(f"Finished Training with best epoch = {best_epoch_cnt}, val_loss = {best_val_loss}")
-            output_model_path = Path(best_epoch_path) / "model_best.pt"
+            output_model_path = Path(best_epoch_path).parent / "model_best.pt"
             log.info(f"Storing best model in {output_model_path} ...")
+            # TODO: Fix the output_model_path
             shutil.copy(best_epoch_path, output_model_path)
         else:
             log.warning("No model finished training!")

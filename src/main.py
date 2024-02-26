@@ -2,6 +2,7 @@ import logging
 import sys
 from typing import Callable, Tuple
 from pathlib import Path
+import os
 
 import torch
 import torch.nn as nn
@@ -31,6 +32,7 @@ def select_device(preference: str) -> Tuple[torch.device, bool]:
 
 
 def image_segmentation_accuracy(target, prediction):
+    # TODO: Implement 1-2 image segmentation accuracy functions
     pass
 
 
@@ -53,7 +55,16 @@ def load_model(
     return model
 
 
-def _train(data_folder: str, workdir: str, dev: torch.device, amp: bool):
+def _train(data_folder: str, max_epochs: int, workdir: str, dev: torch.device, amp: bool):
+    """Load a CaravanImage Dataset and Train a UNET with the TrainingManager
+
+    Args:
+        data_folder (str): Training Dataset folder 
+        max_epochs (int): train up to `max_epochs` epochs
+        workdir (str): path to working directory storing logs and checkpoints
+        dev (torch.device): torch device to use for training
+        amp (bool): if True, use automatic mixed precision training
+    """
     trn_tf, val_tf = CaravanImageDataLoader.get_default_transforms(
         height=1280 // 4, width=1920 // 4
     )
@@ -65,7 +76,7 @@ def _train(data_folder: str, workdir: str, dev: torch.device, amp: bool):
     tm: TrainingManager = TrainingManager(
         model, data, loss_fn, optimizer, workdir, dev=dev, amp=amp
     )
-    tm.train()
+    tm.train(max_epoch=max_epochs)
 
 
 def _run(model_path: str, data_folder: str, dev: torch.device) -> None:
@@ -81,25 +92,37 @@ def _run(model_path: str, data_folder: str, dev: torch.device) -> None:
 
                 pred_mask = model(_image)
 
-                #minibatch_masks = pred_mask.float().unsqueeze(1).to("cpu").numpy()
-                # squeeze(1) ... get rid of the channel dimension, always 1
+                # squeeze(1) ... get rid of the second axis if it is of dimension 1
                 minibatch_masks = list(pred_mask.squeeze(1).to("cpu").numpy())
+                
+                # The training data is a binary mask with values of [0, 1]
+                # The sigmoid in the output layer will produce a value between [0.0, 1.0]
+                # Having a simple centered threshold makes most sense. 
+                masks.extend([(m>=0.5)*255 for m in minibatch_masks])
 
-                # Convert from [-X, +X] -> [0, 255]
-                norm_masks = [(((m - m.min())/(m.max()-m.min()))*255).astype(int) for m in minibatch_masks]
-                masks.extend(norm_masks)
+                # Experimenting with other masks
+                # In the end this makes no sense, because the masks are calculated
+                # by looking at the output values of single images and batches
+                # the loss function in training is not taking any locally information
+
+                # Values above the mean value of each single mask are positive, this will always result in about
+                # The same number of positive/negative pixels
+                #masks.extend([(m>=m.mean())*255 for m in minibatch_masks])
+
+
 
     original_images = []
-    image_masks = []
     for i in range(3):
         # Convert from tensor to numpy [C, X, Y] -> [X, Y, C]
         original_images.append(np.moveaxis(data.dataset[i].numpy(), 0, -1))
-        image_masks.append(masks[i])
 
-    fig = create_figure_of_image_mask_pairs(list(zip(original_images, image_masks))) 
+    fig = create_figure_of_image_mask_pairs(list(zip(original_images, masks))) 
     fig.show()
     plt.show()
-
+    
+    #fig = create_figure_of_image_mask_pairs(list(zip(original_images, masks2))) 
+    #fig.show()
+    #plt.show()
 
 
 def getLogger(module_name: str, filename: str, stdout_log_level: str) -> logging.Logger:
@@ -129,12 +152,26 @@ def getLogger(module_name: str, filename: str, stdout_log_level: str) -> logging
 @click.version_option(__version__)
 @click.option("-v", "--verbose", count=True, show_default=True)
 @click.option("-l", "--logfile", default=f"unet.log", show_default=True)
-@click.option("-w", "--workdir", default="WD", show_default=True)
+@click.option("-w", "--workdir", default="WD", show_default=True, type=click.Path(file_okay=False))
+@click.option("-ow", "--overwrite", is_flag=True, help="Overwrite working directory")
 @click.option("-d", "--device", default="cuda", show_default=True)
 @click.pass_context
-def unet(ctx, verbose: int, logfile: str, workdir: str, device: str):
+def unet(ctx, verbose: int, logfile: str, workdir: str, overwrite: bool, device: str):
     global log
     dev, amp = select_device(device)
+    
+    workdir = os.path.abspath(workdir)
+    if os.path.exists(workdir):
+        if os.listdir(workdir) != [] and not overwrite:
+            print(f"Warning working dir {workdir} contains data! Proceed? [y/[n]]")
+            selection = input()
+            if selection.lower() != 'y':
+                print('Aborting ...')
+                exit()
+    else:
+        print(f"creating new working directory!")
+        os.mkdir(workdir)
+
     ctx.obj["dev"] = dev
     ctx.obj["amp"] = amp
     ctx.obj["workdir"] = workdir
@@ -150,16 +187,28 @@ def unet(ctx, verbose: int, logfile: str, workdir: str, device: str):
 
 @unet.command()
 @click.argument("data_folder")
+@click.option("-e", "--epochs", default=5, show_default=True)
 @click.pass_context
-def train(ctx, data_folder: str):
-    _train(data_folder, ctx.obj["workdir"], ctx.obj["dev"], ctx.obj["amp"])
+def train(ctx, data_folder: str, epochs: int):
+    """Train a model on the given dataset folder
+
+    Args:
+        data_folder (str): File path to a folder containing a complete training & validation dataset 
+    """
+    _train(data_folder, epochs, ctx.obj["workdir"], ctx.obj["dev"], ctx.obj["amp"])
 
 
 @unet.command()
-@click.argument("model_path")
-@click.argument("data_folder")
+@click.argument("model_path", type=click.Path(exists=True))
+@click.argument("data_folder", type=click.Path(exists=True, file_okay=False))
 @click.pass_context
 def run(ctx, model_path: str, data_folder: str):
+    """Run a trained model on the given data folder.
+
+    Args:
+        model_path (str): The path to model checkpoint 
+        data_folder (str): The path to the folder containing training dataset
+    """
     _run(model_path, data_folder, ctx.obj["dev"])
 
 

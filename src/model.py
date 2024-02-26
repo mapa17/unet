@@ -97,7 +97,7 @@ class UNET(nn.Module):
         super().__init__()
         convolution_channels = [64, 128, 256, 512]
         input_channel = 3
-        output_channels = 1
+        output_channels = 1 # Only distinguish between foreground and background
 
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
 
@@ -117,7 +117,10 @@ class UNET(nn.Module):
             in_channels = channels
 
         # Each segmentation label has its own output channel!
-        self.output = nn.Conv2d(in_channels, output_channels, kernel_size=1)
+        self.flatten = nn.Conv2d(in_channels, output_channels, kernel_size=1)
+
+        self.output = nn.Sigmoid()
+        # Output size 320, 464
 
         log.info(f"UNET model {self} ...")
 
@@ -147,7 +150,9 @@ class UNET(nn.Module):
             x = step(x, skip_tensor)
             log.debug(f"Decoder Step [{i}]: output tensor shape {x.shape}")
 
+        x = self.flatten(x)
         x = self.output(x)
+
         log.debug(f"Final tensor: {x.shape}")
         return x
 
