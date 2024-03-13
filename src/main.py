@@ -11,7 +11,7 @@ from tqdm import tqdm
 import numpy as np
 from matplotlib import pyplot as plt
 
-from dataset import CaravanImageDataLoader, CaravanImage, create_figure_of_image_mask_pairs
+from CaravanImageDataset import CaravanImageDataLoader, CaravanImage, create_figure_of_image_mask_pairs
 from model import UNET
 from trainingmanager import TrainingManager
 

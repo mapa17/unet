@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from src.dataset import CaravanImageDataLoader
-from src.dataset import CaravanImageDataset
+from CaravanImageDataset import CaravanImageDataLoader
+from CaravanImageDataset import CaravanImageDataset
 
 
 def test_CaravanImageDataset():

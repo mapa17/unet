@@ -16,6 +16,8 @@ import torch
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 
+from pycocotools.coco import COCO
+
 # from numpy.lib.histograms import _histogram_bin_edges_dispatcher
 
 def create_figure_of_image_mask_pairs(pairs: List[Tuple[numpy.ndarray, numpy.ndarray]]) -> Figure:
@@ -28,41 +30,71 @@ def create_figure_of_image_mask_pairs(pairs: List[Tuple[numpy.ndarray, numpy.nda
     return fig
 
 
-class CaravanImageDataset(Dataset):
-    # Optimized for the kaggle dataset: https://www.kaggle.com/competitions/carvana-image-masking-challenge/data
-    def __init__(self, image_path: Path, mask_path: Path, transform: Compose = None):
-        self._image_path = image_path.absolute()
-        self._mask_path = mask_path.absolute()
+from typing import NamedTuple
+
+class COCOImage(NamedTuple):
+    id: int
+    filename: str
+    annotations: List[dict]
+
+
+class COCODataset(Dataset):
+    """COCO Dataset
+    www.cocodataset.org
+
+    An image segmentation dataset with 80 object categories.
+    This data loader is making use of the pycocotools library (https://github.com/ppwwyyxx/cocoapi)
+
+    To load image data, annotations and meta data
+
+    The dataset contains jpg images and json annotations.
+    - 118287 training images
+    - 5000 validation images
+    - 40670 test images (no annotations exist for the test images)
+
+    Args:
+        Dataset (_type_): _description_
+    """
+    def __init__(self, annotation_filepath: Path, image_filepath: Path, transform: Compose = None):
+        self._image_path = image_filepath.absolute()
+        self._images = COCODataset.__load_images(annotation_filepath.absolute())
         self._transform = transform
-
-        self.images = sorted(glob(str(self._image_path.joinpath("*.jpg"))))
-        self.nImages = len(self.images)
-        self.masks = sorted(glob(str(self._mask_path.joinpath("*_mask.jpg"))))
-
+        self.nImages = len(self._images)
+        self.coco = COCO()
+        
         assert self.nImages > 0, "Could not find images!"
-        assert len(self.masks) == self.nImages, "Number of masks and images must be the same!"
+        
+
+    @staticmethod
+    def __load_images(annotation_file_path: Path) -> list[COCOImage]:
+        coco = COCO(annotation_file_path)
+        imgs: List[COCOImage] = []
+
+        for img_id, meta in coco.imgs.items():
+            # A single image can have multiple segmentation.
+            # For each segmentation there is a separate annotation object.
+            # In a single image you can multiple segmentation of the same category
+            annIds = coco.getAnnIds(img_id)
+            annotations = coco.loadAnns(annIds)
+            imgs.append(COCOImage(id=img_id, filename=meta['file_name'], annotations=annotations))
+        return imgs
+
+    def __create_mask(self, annotation):
+        # TODO: Create a mask for each channel based on the annotation object
+        pass
 
     def __len__(self):
         return self.nImages
 
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        imgpath = self.images[index % self.nImages]
-        maskpath = self.masks[index % self.nImages]
-
-        image = cv2.imread(imgpath)
+        index = index % self.nImages
+        img = self._images[index]
+        mask = self.__create_mask(img.annotations)
+        
+        image = cv2.imread(self._image_path / img.filename)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-        mask = cv2.imread(maskpath)
-        mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
-
-        # Convert mask [0, 255] to [0, 1]
-        # Image will be normalized in transformation.
-        # The Albumentation api describes `targets` for each
-        # transformation and the normalization transformation only has **image**
-        # as a target, not **mask**
-        mask = mask / 255.0
-        #print(f"Mask min-max {mask.min()}-{mask.max()}")
-
+        
         if self._transform:
             augmented = self._transform(image=image, mask=mask)
             image = augmented["image"]
@@ -83,7 +115,7 @@ class CaravanImageDataset(Dataset):
 
 
 @dataclass
-class CaravanImageDataLoader:
+class COCODataLoader:
     TRAIN = "train"
     TRAIN_MASKS = "train_masks"
     VAL = "validation"
@@ -93,19 +125,21 @@ class CaravanImageDataLoader:
     validation_loader: DataLoader
 
     def __init__(self, dataset_base_path: str, batch_size: int, train_transform: Compose, valid_transform: Compose):
-        self._training_dataset = CaravanImageDataset(
+        trn_transform, val_transform = self.get_default_transforms()
+
+        self._training_dataset = COCODataset(
             Path(dataset_base_path).joinpath(self.TRAIN),
             Path(dataset_base_path).joinpath(self.TRAIN_MASKS),
-            train_transform,
+            train_transform or trn_transform
         )
         self.training_loader = DataLoader(
             self._training_dataset, batch_size=batch_size, num_workers=4, pin_memory=True, shuffle=True
         )
 
-        self._validation_dataset = CaravanImageDataset(
+        self._validation_dataset = COCODataset(
             Path(dataset_base_path).joinpath(self.VAL),
             Path(dataset_base_path).joinpath(self.VAL_MASKS),
-            valid_transform,
+            valid_transform or val_transform
         )
         self.validation_loader = DataLoader(
             self._validation_dataset,
@@ -145,46 +179,4 @@ class CaravanImageDataLoader:
         )
 
         return train_transform, val_transforms
-
-class CaravanImage(Dataset):
-    """Helper class to load image data for inference
-    """
-    # Optimized for the kaggle dataset: https://www.kaggle.com/competitions/carvana-image-masking-challenge/data
-    def __init__(self, dataset_path: Path, transformation: Compose = None, batch_size: int = 32):
-        """Create a pytorch dataset from the given path containing (training, training_masks, validation, validation_masks)
-        Apply given transformations when loading the images during training.
-        For image augmentation, see [here](https://albumentations.ai/docs/examples/example/#Define-an-augmentation-pipeline-using-Compose,-pass-the-image-to-it-and-receive-the-augmented-image)
-
-        Args:
-            dataset_path (Path): file path to training data folder (containing separate subfolders)
-            transformation (Compose, optional): albumentations image augmentations. Defaults to None.
-            batch_size (int, optional): batch size. Defaults to 32.
-        """
-        self._image_path = dataset_path.absolute()
-
-        if transformation is None:
-            # Get the validation transformation
-            _, transformation = CaravanImageDataLoader.get_default_transforms()
-        self.transformation = transformation
-
-        self.images = sorted(glob(str(self._image_path.joinpath("*.jpg"))))
-        self.nImages = len(self.images)
-
-        assert self.nImages > 0, "Could not find images!"
-
-        self.data_loader = DataLoader(
-            self, batch_size=batch_size, num_workers=4, pin_memory=True, shuffle=False
-        )
-
-    def __len__(self):
-        return self.nImages
-
-    def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        imgpath = self.images[index % self.nImages]
-
-        image = cv2.imread(imgpath)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        tensor = self.transformation(image=image)["image"]
-
-        return tensor 
 
